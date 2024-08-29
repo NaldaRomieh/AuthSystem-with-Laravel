@@ -1,0 +1,79 @@
+{
+	"info": {
+		"_postman_id": "b9689db1-4e21-4b0d-9ee4-a3b5024f3670",
+		"name": "Auth_system",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "37703948"
+	},
+	"item": [
+		{
+			"name": "http://127.0.0.1:8000/api/register",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Accept",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "username",
+							"value": "Nalda350",
+							"type": "text"
+						},
+						{
+							"key": "email",
+							"value": "naldahello@gmail.com",
+							"type": "text"
+						},
+						{
+							"key": "phone",
+							"value": "05528741698",
+							"type": "text"
+						},
+						{
+							"key": "profile_photo",
+							"type": "file",
+							"src": "/C:/Users/Nalda/Pictures/Saved Pictures/silas-baisch-K785Da4A_JA-unsplash.jpg"
+						},
+						{
+							"key": "certificate",
+							"type": "file",
+							"src": "/C:/Users/Nalda/Desktop/my feedback.pdf"
+						},
+						{
+							"key": "password",
+							"value": "1234567870",
+							"type": "text"
+						},
+						{
+							"key": "password_confirmation",
+							"value": "1234567870",
+							"type": "text"
+						}
+					]
+				},
+				"url": {
+					"raw": "http://127.0.0.1:8000/api/register",
+					"protocol": "http",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8000",
+					"path": [
+						"api",
+						"register"
+					]
+				}
+			},
+			"response": []
+		}
+	]
+}
