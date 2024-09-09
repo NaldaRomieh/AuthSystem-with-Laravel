@@ -18,19 +18,25 @@ use Illuminate\Support\Facades\Mail;
 |
 */
 
-Route::get('hello', function () {
-    return 'hello';
-});
-Route::post('register', [AuthController::class, 'signup']);
 
-
-
-Route::get('/test-email', function () {
-    $user = User::first(); // Or create a test user
-    Mail::to($user->email)->send(new VerificationCodeMail('123456'));
-    return 'Email sent!';
+Route::prefix('v1/auth')->group(function () {
+    Route::post('register', [AuthController::class, 'signup']);
+    Route::post('login', [AuthController::class, 'login']);
+    Route::post('confirmemail', [AuthController::class, 'confirmEmailVerification']);
+    Route::post('resendemailvf', [AuthController::class, 'resendEmailVerification']);
 });
 
-Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
-    return $request->user();
+
+
+
+
+Route::prefix('v1/auth')->middleware('auth:sanctum')->group(function () {
+    Route::get('user', function (Request $request) {
+        return $request->user();
+    });
+
+    Route::post('logout', [AuthController::class, 'logout']);
+    Route::post('resend2facode', [AuthController::class, 'resend2FACode']);
+    Route::post('confirm2facode', [AuthController::class, 'confirm2FACode']);
+    Route::post('refreshToken', [AuthController::class, 'refreshToken']);
 });

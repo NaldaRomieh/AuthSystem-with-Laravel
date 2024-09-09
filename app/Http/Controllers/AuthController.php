@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use Illuminate\Support\Str;
 use App\Mail\VerificationCodeMail;
 use Illuminate\Support\Facades\Mail;
@@ -12,155 +13,202 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
 use Laravel\Sanctum\PersonalAccessToken;
+use App\Http\Requests\SignupRequest;
+use App\Mail\codeMailer;
+use App\Services\AuthService;
+use App\Traits\UploadFile;
+use App\Traits\HandleRespons;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
+
 
 
 class AuthController extends Controller
 {
 
-    //signup 
-    public function signup(Request $request)
+    use UploadFile, HandleRespons;
+
+    protected $authService;
+
+    public function __construct(AuthService $authService)
     {
+        $this->authService = $authService;
+    }
 
-        $validator = $request->validate([
-            'username' => 'required|unique:users',
-            'email' => 'required|email|unique:users',
-            'phone' => 'required',
-            'profile_photo' => 'nullable|image',
-            'certificate' => 'nullable|file|mimes:pdf',
-            'password' => 'required|confirmed|min:8',
-        ]);
+    //signup 
+    public function signup(SignupRequest $request)
+    {
+        //DB::enableQueryLog();
+        $validator = $request->validated(); //use the custom request
 
-        $user = User::create([
-            'username' => $validator['username'],
-            'email' => $validator['email'],
-            'phone' => $validator['phone'],
-            'profile_photo' => $validator['profile_photo'],
-            'certificate' => $validator['certificate'],
-            'password' => bcrypt($validator['password']),
-            'email_verification_code' => Str::random(6),
-            'email_verification_expire' => now()->addMinutes(10)
-        ]);
+        $user = $this->authService->createUser($validator);
+
 
         $profilePhotoPath = null;
-        if ($request->hasFile('profile_photo')) {
-            $profilePhotoPath = $request->file('profile_photo')->store('profile_photos', 'public');
-        }
+        $profilePhotoPath = $this->handleFileUpload($request, 'profile_photo', 'profile_photos');
 
         $certificatePath = null;
-        if ($request->hasFile('certificate')) {
-            $certificatePath = $request->file('certificate')->store('certificates', 'public');
-        }
-
+        $certificatePath = $this->handleFileUpload($request, 'certificate', 'certificates');
+        //dd(DB::getQueryLog());
+        $user->profile_photo = $profilePhotoPath;
+        $user->certificate = $certificatePath;
         $user->save();
-        $token = $user->createToken('myapptoken'); //??
+
+        $token = $user->createToken('myappToken')->plainTextToken;
+        event(new SignupEvent($user));
+
+        return $this->successResponse([
+            'user' => $user,
+            'token' => $token,
+        ], 'User registered successfully', 201);
+    }
+
+
+    ///// Re-Send email verfication code 
+
+    public function resendEmailVerificationCode(Request $request)
+    {
+        $request->validate([
+            'email' => 'required|exists:users,email',
+        ]);
+
+        $user = User::where('email', $request->email)->first();
+        $verificationCode = Str::random(6);
+        $cacheKey = 'email_verification_' . $user->id;
+        Cache::put($cacheKey, $verificationCode, 10 * 60);
 
         event(new SignupEvent($user));
 
-        return response()->json(['message' => 'User registered successfully. Check your email for verification code.'], 201);
+        return $this->successResponse(['message' => 'Verification code sent successfully.']);
     }
+
 
     //////////////////
     //login function 
 
+
+
     public function login(Request $request)
     {
-        $validator = Validator::make($request->all(), [
-            'email_or_phone' => 'required',
-            'password' => 'required',
+        $request->validate([
+            'identifier' => 'required',
+            'password' => 'required|min:6',
         ]);
 
-        if ($validator->fails()) {
-            return response()->json($validator->errors(), 422);
-        }
-
-        $user = User::where('email', $request->email_or_phone)
-            ->orWhere('phone_number', $request->email_or_phone)
+        $user = User::where('email', $request->identifier)
+            ->orWhere('phone', $request->identifier)
             ->first();
 
         if (!$user || !Hash::check($request->password, $user->password)) {
-            return response()->json(['message' => 'Invalid credentials'], 401);
+            return $this->errorResponse('Invalid credentials', 401);
         }
 
 
-        if (!$user->email_verified_at) {
-            return response()->json(['message' => 'Email not verified.'], 403);
-        }
+        $token = $user->createToken('Personal Access Token')->plainTextToken;
+        $code = rand(100000, 999999);
+        Cache::put('2fa_code_' . $user->id, $code, now()->addMinutes(10));
+        Mail::to($user->email)->send(new codeMailer($user, $code));
 
-        $user->two_factor_code = rand(100000, 999999);
-        $user->save();
-
-
-        Mail::raw("Your 2FA code is: $user->two_factor_code", function ($message) use ($user) {
-            $message->to($user->email)->subject('2FA Code');
-        });
-
-        return response()->json(['message' => '2FA code sent.']);
+        return $this->successResponse([
+            'user' => $user,
+            'message' => '2FA code sent to your email.',
+            'token' => $token,
+            'code' => $code
+        ], 'Login successful', 200);
     }
 
-    public function verify2FA(Request $request)
+    ///// confirm email verification code 
+    public function confirmEmailVerification(Request $request)
     {
         $request->validate([
-            'email_or_phone' => 'required',
-            'two_factor_code' => 'required',
+            'email' => 'required|email',
+            'verification_code' => 'required'
         ]);
 
-        $user = User::where('email', $request->email_or_phone)
-            ->orWhere('phone_number', $request->email_or_phone)
-            ->first();
+        $user = User::where('email', $request->email)->first();
 
-        if ($user && $user->two_factor_code == $request->two_factor_code) {
-
-            $user->two_factor_code = null;
-            $user->save();
-
-
-            $token = $user->createToken('API Token')->plainTextToken;
-
-            return response()->json([
-                'access_token' => $token,
-                'token_type' => 'Bearer',
-                'expires_in' => config('sanctum.expiration') * 60,
-            ]);
+        if (!$user || $user->email_verification_code !== $request->verification_code) {
+            return $this->errorResponse('Invalid verification code.', 400);
         }
 
-        return response()->json(['message' => 'Invalid 2FA code.'], 401);
-    }
-    ///////////////////////////////
-    //logout function..
+        if (now()->greaterThan($user->email_verification_expire)) {
+            return $this->errorResponse('Verification code expired.', 400);
+        }
 
+        $user->email_verified_at = now();
+        $user->email_verification_code = null;
+        $user->email_verification_expire = null;
+        $user->save();
+
+        return $this->successResponse([], 'Email verified successfully.', 200);
+    }
+    /////
+    ////Resend email verification 
+    public function resendEmailVerification(Request $request)
+    {
+        $request->validate(['email' => 'required|email']);
+
+        $user = User::where('email', $request->email)->first();
+
+        if (!$user) {
+            return $this->errorResponse('User not found.', 404);
+        }
+
+        $user->email_verification_code = Str::random(6);
+        $user->email_verification_expire = now()->addMinutes(10);
+        $user->save();
+
+        event(new SignupEvent($user));
+
+        return $this->successResponse([], 'Verification code resent.', 200);
+    }
+    ////
+    ////log out function 
     public function logout(Request $request)
     {
-        $request->user()->tokens()->delete();
+
+        $request->user()->currentAccessToken()->delete();
+
         return response()->json(['message' => 'Logged out successfully.']);
     }
-    /////////////////////////////
+    public function resend2FACode(Request $request)
+    {
+        $user = Auth::user();
+        $code = rand(100000, 999999);
+        Cache::put('2fa_code_' . $user->id, $code, now()->addMinutes(10));
+        Mail::to($user->email)->send(new codeMailer($user, $code));
+
+        return response()->json(['message' => '2FA code has been re-sent.']);
+    }
+
+
+    public function confirm2FACode(Request $request)
+    {
+        $request->validate([
+            '2fa_code' => 'required|numeric',
+        ]);
+
+        $user = Auth::user();
+        $cachedCode = Cache::get('2fa_code_' . $user->id);
+
+        if ($cachedCode && $request->input('2fa_code') == $cachedCode) {
+            Cache::forget('2fa_code_' . $user->id);
+
+            return response()->json(['message' => '2FA verification successful.']);
+        }
+
+        return response()->json(['message' => 'Invalid 2FA code.'], 422);
+    }
+
 
     public function refreshToken(Request $request)
     {
-        $request->validate([
-            'refresh_token' => 'required',
-        ]);
-
-        $refreshToken = $request->input('refresh_token');
-        $token = PersonalAccessToken::findToken($refreshToken);
-
-        if (!$token || $token->created_at->addMinutes(config('sanctum.refresh_token_expiration'))->isPast()) {
-            return response()->json(['message' => 'Refresh token is invalid or expired.'], 401);
-        }
-
-
-        $token->delete();
-
-
-        $user = $token->tokenable;
-
-        // Generate a new token 
-        $newAccessToken = $user->createToken('API Token')->plainTextToken;
+        $newToken = Auth::refresh();
 
         return response()->json([
-            'access_token' => $newAccessToken,
+            'access_token' => $newToken,
             'token_type' => 'Bearer',
-            'expires_in' => config('sanctum.expiration') * 60, // was added in the config file 
+            'expires_in' => config('sanctum.expiration') * 60
         ]);
     }
 }

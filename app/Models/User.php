@@ -23,7 +23,9 @@ class User extends Authenticatable
         'phone',
         'profile_photo',
         'certificate',
+        'email_verification_code',
         'password',
+        'email_verification_expire'
     ];
 
     /**
